@@ -3,6 +3,7 @@ from evaluator import ProbingEvaluator
 import torch
 from models import MockModel
 import glob
+from models import JEPAModel
 
 
 def get_device():
@@ -44,12 +45,19 @@ def load_data(device):
     return probe_train_ds, probe_val_ds
 
 
+# def load_model():
+#     """Load or initialize the model."""
+#     # TODO: Replace MockModel with your trained model
+#     model = MockModel()
+#     return model
+
 def load_model():
     """Load or initialize the model."""
-    # TODO: Replace MockModel with your trained model
-    model = MockModel()
+    # Load our trained JEPA model
+    model = JEPAModel(repr_dim=256, hidden_dim=256).to(get_device())
+    model.load_state_dict(torch.load('jepa_final_model.pt'))
+    model.eval()
     return model
-
 
 def evaluate_model(device, model, probe_train_ds, probe_val_ds):
     evaluator = ProbingEvaluator(
