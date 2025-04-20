@@ -54,7 +54,11 @@ def load_data(device):
 def load_model():
     """Load or initialize the model."""
     # Load our trained JEPA model
-    model = JEPAModel(repr_dim=256, hidden_dim=256).to(get_device())
+    model = JEPAModel(
+        repr_dim=128,    # you can tune this
+        action_dim=2,
+        shared_dim=128,  # controls Conv capacity
+    ).to(get_device())
     model.load_state_dict(torch.load('jepa_final_model.pt'))
     model.eval()
     return model
