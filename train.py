@@ -65,7 +65,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Load data
 def load_training_data(data_path="/scratch/DL25SP/train"):
-    states = np.load(f"{data_path}/states.npy")
+    states = np.load(f"{data_path}/states.npy",mm_mode="r")
     actions = np.load(f"{data_path}/actions.npy")
     
     print(f"Loaded states with shape {states.shape}")
@@ -133,7 +133,7 @@ def train_jepa(model, dataloader, optimizer, epochs):
                 
                 # Calculate loss for each timestep except the first (which is the same)
                 losses = []
-                loss_info = {'sim_loss': 0, 'var_loss': 0, 'cov_loss': 0}
+                loss_info = {'sim_loss': 0, 'var_loss': 0, 'cov_loss': 0, 'total_loss': 0}
                 
                 for t in range(1, T):
                     loss, info = vicreg_loss(
