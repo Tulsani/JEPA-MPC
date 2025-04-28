@@ -5,6 +5,8 @@ import numpy as np
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm.auto import tqdm
 from models import JEPAModel
+import torch.nn.functional as F
+
 
 def vicreg_loss(pred_repr, target_repr, sim_coef=25.0, var_coef=25.0, cov_coef=1.0):
     """
@@ -65,7 +67,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Load data
 def load_training_data(data_path="/scratch/DL25SP/train"):
-    states = np.load(f"{data_path}/states.npy",mm_mode="r")
+    states = np.load(f"{data_path}/states.npy",mmap_mode="r")
     actions = np.load(f"{data_path}/actions.npy")
     
     print(f"Loaded states with shape {states.shape}")
@@ -144,7 +146,7 @@ def train_jepa(model, dataloader, optimizer, epochs):
                     for k, v in info.items():
                         loss_info[k] += v
                 
-                # Average the losses
+                # Average the losses    
                 total_loss = sum(losses) / len(losses)
                 for k in loss_info:
                     loss_info[k] /= len(losses)
