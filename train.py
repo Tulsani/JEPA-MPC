@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from tqdm.auto import tqdm
 from models import JEPAModel
 import torch.nn.functional as F
+import os
 
 
 def vicreg_loss(pred_repr, target_repr, sim_coef=25.0, var_coef=25.0, cov_coef=1.0):
@@ -67,7 +68,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Load data
 def load_training_data(data_path="/scratch/DL25SP/train"):
-    states = np.load(f"{data_path}/states.npy",mmap_mode="r")
+    states = np.load(f"{data_path}/states.npy", mmap_mode="r")
     actions = np.load(f"{data_path}/actions.npy")
     
     print(f"Loaded states with shape {states.shape}")
@@ -95,6 +96,9 @@ def create_dataloader(states, actions, batch_size=64):
 
 # Training function
 def train_jepa(model, dataloader, optimizer, epochs):
+    # Create checkpoints directory
+    os.makedirs('checkpoints', exist_ok=True)
+    
     model.train()
     
     for epoch in range(epochs):
@@ -113,27 +117,44 @@ def train_jepa(model, dataloader, optimizer, epochs):
                 # Teacher forcing approach
                 B, T, C, H, W = states.shape
                 
-                # Encode all states with the encoder
+                # Encode all states with the encoder (now returns repr and slots)
                 target_reprs = []
+                target_slots_list = []
                 for t in range(T):
-                    target_reprs.append(model.encoder(states[:, t]))
+                    with torch.no_grad():  # Detach target encoder
+                        target_repr, target_slots = model.encoder(states[:, t])
+                        target_reprs.append(target_repr)
+                        target_slots_list.append(target_slots)
                 
                 target_reprs = torch.stack(target_reprs, dim=1)  # [B, T, repr_dim]
                 
-                # Predict representations recurrently
-                init_state = states[:, 0]
-                current_repr = model.encoder(init_state)
+                # Get initial representation and slots
+                init_repr, init_slots = model.encoder(states[:, 0])
                 
-                pred_reprs = [current_repr]
+                # Predict representations recurrently
+                pred_reprs = [init_repr]
+                current_slots = init_slots
+                
                 for t in range(T-1):
                     current_action = actions[:, t]
-                    next_repr = model.predictor(current_repr, current_action)
+                    
+                    # Predict next agent representation
+                    next_agent_repr = model.predictor(current_slots, current_action)
+                    
+                    # Update agent slot, keep wall slot static
+                    next_slots = current_slots.clone()
+                    next_slots[:, 0] = next_agent_repr
+                    
+                    # Combine slots into full representation
+                    slots_combined = next_slots.reshape(B, -1)  # [B, 2*repr_dim]
+                    next_repr = model.encoder.projection(slots_combined)  # [B, repr_dim]
+                    
                     pred_reprs.append(next_repr)
-                    current_repr = next_repr  # For next step
+                    current_slots = next_slots
                 
                 pred_reprs = torch.stack(pred_reprs, dim=1)  # [B, T, repr_dim]
                 
-                # Calculate loss for each timestep except the first (which is the same)
+                # Calculate loss for each timestep (skip first timestep)
                 losses = []
                 loss_info = {'sim_loss': 0, 'var_loss': 0, 'cov_loss': 0, 'total_loss': 0}
                 
@@ -153,6 +174,10 @@ def train_jepa(model, dataloader, optimizer, epochs):
                 
                 # Backpropagate and update
                 total_loss.backward()
+                
+                # Gradient clipping to prevent explosions
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                
                 optimizer.step()
                 
                 # Log
@@ -178,7 +203,7 @@ def train_jepa(model, dataloader, optimizer, epochs):
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'loss': epoch_loss / len(dataloader),
-            }, f'jepa_checkpoint_epoch_{epoch+1}.pt')
+            }, f'checkpoints/jepa_checkpoint_epoch_{epoch+1}.pt')
     
     # Save final model
     torch.save(model.state_dict(), 'jepa_final_model.pt')
