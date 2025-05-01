@@ -74,6 +74,7 @@ class Encoder(nn.Module):
         
         return representation
 
+
 class Predictor(nn.Module):
     def __init__(self, repr_dim=256, action_dim=2, hidden_dim=256):
         super().__init__()
@@ -91,7 +92,9 @@ class Predictor(nn.Module):
         self.gru = nn.GRU(
             input_size=repr_dim + 64,  # Representation + action embedding
             hidden_size=hidden_dim,
-            batch_first=True
+            batch_first=True,
+            num_layers=2,  # Added an extra layer for better temporal modeling
+            dropout=0.1    # Add dropout for regularization
         )
         
         # Final prediction head
@@ -100,9 +103,10 @@ class Predictor(nn.Module):
             nn.BatchNorm1d(repr_dim)
         )
         
-    def forward(self, state_repr, action):
+    def forward(self, state_repr, action, hidden=None):
         # state_repr: [B, repr_dim]
         # action: [B, action_dim]
+        # hidden: Optional hidden state for stateful prediction
         
         # Embed action
         action_embed = self.action_embedding(action)  # [B, 64]
@@ -112,13 +116,18 @@ class Predictor(nn.Module):
         combined = combined.unsqueeze(1)  # Add sequence dimension: [B, 1, repr_dim+64]
         
         # Pass through GRU
-        output, _ = self.gru(combined)  # [B, 1, hidden_dim]
+        if hidden is None:
+            output, new_hidden = self.gru(combined)  # [B, 1, hidden_dim]
+        else:
+            output, new_hidden = self.gru(combined, hidden)
+        
         output = output.squeeze(1)  # [B, hidden_dim]
         
         # Final prediction
         pred = self.pred_head(output)  # [B, repr_dim]
         
-        return pred
+        return pred, new_hidden
+
 
 class JEPAModel(nn.Module):
     def __init__(self, repr_dim=256, action_dim=2, hidden_dim=256):
@@ -150,11 +159,14 @@ class JEPAModel(nn.Module):
         # List to store all representations
         all_reprs = [current_repr]
         
+        # Track hidden state for GRU
+        hidden = None
+        
         # Unroll predictions recurrently
         for t in range(T_minus_1):
             current_action = actions[:, t]  # [B, 2]
             # Predict next representation
-            next_repr = self.predictor(current_repr, current_action)
+            next_repr, hidden = self.predictor(current_repr, current_action, hidden)
             all_reprs.append(next_repr)
             current_repr = next_repr  # For next step
         
@@ -162,32 +174,65 @@ class JEPAModel(nn.Module):
         all_reprs = torch.stack(all_reprs, dim=1)  # [B, T, repr_dim]
         
         return all_reprs
-
-class MockModel(torch.nn.Module):
-    """
-    Does nothing. Just for testing.
-    """
-
-    def __init__(self, device="cuda", output_dim=256):
-        super().__init__()
-        self.device = device
-        self.repr_dim = output_dim
-
-    def forward(self, states, actions):
+    
+    def get_target_representations(self, states):
         """
+        Get target representations for all states in the sequence
+        
         Args:
-            During training:
-                states: [B, T, Ch, H, W]
-            During inference:
-                states: [B, 1, Ch, H, W]
-            actions: [B, T-1, 2]
-
-        Output:
-            predictions: [B, T, D]
+            states: [B, T, 2, H, W]
+            
+        Returns:
+            target_reprs: [B, T, repr_dim]
+        """
+        B, T, _, H, W = states.shape
+        
+        target_reprs = []
+        for t in range(T):
+            # Encode each state individually
+            state_t = states[:, t]  # [B, 2, H, W]
+            repr_t = self.encoder(state_t)  # [B, repr_dim]
+            target_reprs.append(repr_t)
+        
+        # Stack all representations
+        target_reprs = torch.stack(target_reprs, dim=1)  # [B, T, repr_dim]
+        
+        return target_reprs
+    
+    def predict_multi_step(self, init_state, actions):
+        """
+        Predict representations for multiple steps ahead
+        
+        Args:
+            init_state: [B, 2, H, W]
+            actions: [B, T, 2]
+            
+        Returns:
+            pred_reprs: [B, T+1, repr_dim]
         """
         B, T, _ = actions.shape
-
-        return torch.randn((B, T + 1, self.repr_dim)).to(self.device)
+        
+        # Encode initial state
+        current_repr = self.encoder(init_state)  # [B, repr_dim]
+        
+        # List to store all representations
+        all_reprs = [current_repr]
+        
+        # Track hidden state for GRU
+        hidden = None
+        
+        # Unroll predictions recurrently
+        for t in range(T):
+            current_action = actions[:, t]  # [B, 2]
+            # Predict next representation
+            next_repr, hidden = self.predictor(current_repr, current_action, hidden)
+            all_reprs.append(next_repr)
+            current_repr = next_repr  # For next step
+        
+        # Stack all representations
+        all_reprs = torch.stack(all_reprs, dim=1)  # [B, T+1, repr_dim]
+        
+        return all_reprs
 
 
 class Prober(torch.nn.Module):

@@ -6,6 +6,8 @@ from torch.utils.data import DataLoader, TensorDataset
 from tqdm.auto import tqdm
 from models import JEPAModel
 import torch.nn.functional as F
+import os
+import matplotlib.pyplot as plt
 
 
 def vicreg_loss(pred_repr, target_repr, sim_coef=25.0, var_coef=25.0, cov_coef=1.0):
@@ -57,6 +59,112 @@ def vicreg_loss(pred_repr, target_repr, sim_coef=25.0, var_coef=25.0, cov_coef=1
         'total_loss': total_loss.item()
     }
 
+
+def multi_step_vicreg_loss(pred_reprs, target_reprs, unroll_steps=[1, 3, 5], weights=None):
+    """
+    Apply VicReg loss at multiple time horizons to enforce temporal coherence
+    
+    Args:
+        pred_reprs: Predicted representations [B, T, D]
+        target_reprs: Target representations [B, T, D]
+        unroll_steps: List of time horizons to apply loss at
+        weights: Optional weights for each horizon loss (default: equal weights)
+    """
+    B, T, D = pred_reprs.shape
+    
+    if weights is None:
+        # Equal weighting by default, but decreasing with horizon length could also work
+        weights = [1.0] * len(unroll_steps)
+    
+    # Normalize weights
+    weights = [w / sum(weights) for w in weights]
+    
+    losses = []
+    loss_infos = []
+    
+    for i, step in enumerate(unroll_steps):
+        if step >= T:
+            continue
+            
+        # For each horizon length, calculate losses for all possible starting points
+        horizon_losses = []
+        horizon_infos = []
+        
+        # Apply loss for each valid starting position
+        for start in range(T - step):
+            end = start + step
+            loss, info = vicreg_loss(pred_reprs[:, end], target_reprs[:, end])
+            horizon_losses.append(loss)
+            horizon_infos.append(info)
+        
+        # Average losses for this horizon length
+        if horizon_losses:
+            avg_loss = sum(horizon_losses) / len(horizon_losses)
+            losses.append(weights[i] * avg_loss)
+            
+            # Average loss info
+            avg_info = {}
+            for k in horizon_infos[0].keys():
+                avg_info[k] = sum(info[k] for info in horizon_infos) / len(horizon_infos)
+            loss_infos.append(avg_info)
+    
+    # Combine all horizon losses
+    total_loss = sum(losses)
+    
+    # Combine loss info
+    combined_info = {}
+    for k in loss_infos[0].keys():
+        combined_info[k] = sum(info[k] for info in loss_infos) / len(loss_infos)
+    combined_info['total_loss'] = total_loss.item()
+    
+    return total_loss, combined_info
+
+
+# Data augmentation functions
+def random_flip(states, actions):
+    """Randomly flip the x-axis (horizontal flip)"""
+    if torch.rand(1) < 0.5:
+        # Flip states horizontally
+        states = torch.flip(states, dims=[3])  # Flip width dimension
+        # Flip x component of actions
+        actions[..., 0] = -actions[..., 0]
+    return states, actions
+
+def random_crop_and_resize(states, size=64):
+    """Randomly crop and resize back to original size"""
+    B, T, C, H, W = states.shape
+    
+    # Flatten batch and time dimensions for processing
+    states_flat = states.view(-1, C, H, W)
+    
+    # Random crop size (between 80% and 100% of original)
+    crop_size = int(torch.rand(1) * 0.2 * size + 0.8 * size)
+    
+    # Random crop
+    i = torch.randint(0, H - crop_size + 1, (1,))
+    j = torch.randint(0, W - crop_size + 1, (1,))
+    states_cropped = states_flat[:, :, i:i+crop_size, j:j+crop_size]
+    
+    # Resize back to original
+    states_resized = F.interpolate(states_cropped, size=(H, W), mode='bilinear', align_corners=False)
+    
+    # Reshape back to original dimensions
+    states = states_resized.view(B, T, C, H, W)
+    
+    return states
+
+def apply_augmentations(states, actions):
+    """Apply a series of augmentations to the data"""
+    # Flipping (affects both states and actions)
+    states, actions = random_flip(states, actions)
+    
+    # Cropping (only affects states)
+    if torch.rand(1) < 0.5:  # 50% chance of applying crop
+        states = random_crop_and_resize(states)
+    
+    return states, actions
+
+
 # Hyperparameters
 repr_dim = 256
 hidden_dim = 256
@@ -65,9 +173,22 @@ learning_rate = 0.001
 epochs = 100
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# Define multi-step horizons for prediction
+unroll_horizons = [1, 3, 5]  # Predict 1, 3, and 5 steps ahead
+horizon_weights = [0.5, 0.3, 0.2]  # Higher weight to shorter horizons
+
+# Learning rate scheduler parameters
+lr_warmup_epochs = 5
+lr_decay_epochs = 50
+
+# Create output directory for checkpoints and logs
+os.makedirs('checkpoints', exist_ok=True)
+os.makedirs('logs', exist_ok=True)
+
+
 # Load data
 def load_training_data(data_path="/scratch/DL25SP/train"):
-    states = np.load(f"{data_path}/states.npy",mmap_mode="r")
+    states = np.load(f"{data_path}/states.npy", mmap_mode="r")
     actions = np.load(f"{data_path}/actions.npy")
     
     print(f"Loaded states with shape {states.shape}")
@@ -75,27 +196,69 @@ def load_training_data(data_path="/scratch/DL25SP/train"):
     
     return states, actions
 
+
 def create_dataloader(states, actions, batch_size=64):
+    # Create a sampler for efficient loading with memory-mapped arrays
+    num_trajectories = states.shape[0]
+    
     # Convert to PyTorch tensors
-    states_tensor = torch.FloatTensor(states)
+    # For memory-mapped states, we'll load batches on-the-fly
     actions_tensor = torch.FloatTensor(actions)
     
-    # Create dataset
-    dataset = TensorDataset(states_tensor, actions_tensor)
+    # Create dataset class that loads states on demand
+    class TrajectoryDataset(torch.utils.data.Dataset):
+        def __init__(self, states, actions):
+            self.states = states
+            self.actions = actions
+        
+        def __len__(self):
+            return len(self.actions)
+        
+        def __getitem__(self, idx):
+            # Load state on demand from memory-mapped array
+            state = torch.FloatTensor(self.states[idx])
+            action = self.actions[idx]
+            return state, action
+    
+    dataset = TrajectoryDataset(states, actions_tensor)
     
     # Create dataloader
     dataloader = DataLoader(
         dataset, 
         batch_size=batch_size, 
         shuffle=True, 
-        drop_last=True
+        drop_last=True,
+        num_workers=4,  # Parallel data loading
+        pin_memory=True  # Faster data transfer to GPU
     )
     
     return dataloader
 
+
+# Learning rate scheduler
+def get_lr_scheduler(optimizer, warmup_epochs, decay_epochs, total_epochs):
+    def lr_lambda(epoch):
+        if epoch < warmup_epochs:
+            # Linear warmup
+            return epoch / warmup_epochs
+        else:
+            # Cosine decay
+            decay_ratio = (epoch - warmup_epochs) / decay_epochs
+            decay_ratio = min(decay_ratio, 1.0)  # Cap at 1.0
+            return 0.5 * (1.0 + np.cos(np.pi * decay_ratio))
+    
+    return optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+
 # Training function
 def train_jepa(model, dataloader, optimizer, epochs):
     model.train()
+    
+    # Initialize learning rate scheduler
+    scheduler = get_lr_scheduler(optimizer, lr_warmup_epochs, lr_decay_epochs, epochs)
+    
+    # Lists to track metrics
+    epoch_losses = []
     
     for epoch in range(epochs):
         epoch_loss = 0
@@ -108,51 +271,28 @@ def train_jepa(model, dataloader, optimizer, epochs):
                 states = states.to(device)
                 actions = actions.to(device)
                 
+                # Apply data augmentations
+                states, actions = apply_augmentations(states, actions)
+                
                 optimizer.zero_grad()
                 
-                # Teacher forcing approach
-                B, T, C, H, W = states.shape
-                
-                # Encode all states with the encoder
-                target_reprs = []
-                for t in range(T):
-                    target_reprs.append(model.encoder(states[:, t]))
-                
-                target_reprs = torch.stack(target_reprs, dim=1)  # [B, T, repr_dim]
+                # Get target representations for all states
+                target_reprs = model.get_target_representations(states)
                 
                 # Predict representations recurrently
-                init_state = states[:, 0]
-                current_repr = model.encoder(init_state)
+                pred_reprs = model.predict_multi_step(states[:, 0], actions)
                 
-                pred_reprs = [current_repr]
-                for t in range(T-1):
-                    current_action = actions[:, t]
-                    next_repr = model.predictor(current_repr, current_action)
-                    pred_reprs.append(next_repr)
-                    current_repr = next_repr  # For next step
-                
-                pred_reprs = torch.stack(pred_reprs, dim=1)  # [B, T, repr_dim]
-                
-                # Calculate loss for each timestep except the first (which is the same)
-                losses = []
-                loss_info = {'sim_loss': 0, 'var_loss': 0, 'cov_loss': 0, 'total_loss': 0}
-                
-                for t in range(1, T):
-                    loss, info = vicreg_loss(
-                        pred_reprs[:, t], 
-                        target_reprs[:, t]
-                    )
-                    losses.append(loss)
-                    for k, v in info.items():
-                        loss_info[k] += v
-                
-                # Average the losses    
-                total_loss = sum(losses) / len(losses)
-                for k in loss_info:
-                    loss_info[k] /= len(losses)
+                # Calculate multi-step losses
+                total_loss, loss_info = multi_step_vicreg_loss(
+                    pred_reprs, 
+                    target_reprs,
+                    unroll_steps=unroll_horizons,
+                    weights=horizon_weights
+                )
                 
                 # Backpropagate and update
                 total_loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # Gradient clipping
                 optimizer.step()
                 
                 # Log
@@ -166,23 +306,44 @@ def train_jepa(model, dataloader, optimizer, epochs):
                     'loss': epoch_loss / (batch_idx + 1),
                     'sim': sim_losses / (batch_idx + 1),
                     'var': var_losses / (batch_idx + 1),
-                    'cov': cov_losses / (batch_idx + 1)
+                    'cov': cov_losses / (batch_idx + 1),
+                    'lr': optimizer.param_groups[0]['lr']
                 })
         
-        print(f"Epoch {epoch+1}/{epochs}, Loss: {epoch_loss / len(dataloader)}")
+        # Update learning rate
+        scheduler.step()
+        
+        avg_epoch_loss = epoch_loss / len(dataloader)
+        epoch_losses.append(avg_epoch_loss)
+        
+        print(f"Epoch {epoch+1}/{epochs}, Loss: {avg_epoch_loss:.6f}, LR: {optimizer.param_groups[0]['lr']:.6f}")
         
         # Save checkpoint
-        if (epoch + 1) % 10 == 0:
+        if (epoch + 1) % 5 == 0 or epoch == epochs - 1:
+            checkpoint_path = f'checkpoints/jepa_checkpoint_epoch_{epoch+1}.pt'
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                'loss': epoch_loss / len(dataloader),
-            }, f'jepa_checkpoint_epoch_{epoch+1}.pt')
+                'loss': avg_epoch_loss,
+            }, checkpoint_path)
+            print(f"Checkpoint saved to {checkpoint_path}")
+        
+        # Plot and save loss curve
+        if epoch > 0:
+            plt.figure(figsize=(10, 5))
+            plt.plot(range(1, epoch + 2), epoch_losses)
+            plt.xlabel('Epoch')
+            plt.ylabel('Loss')
+            plt.title('Training Loss Curve')
+            plt.grid(True)
+            plt.savefig('logs/loss_curve.png')
+            plt.close()
     
     # Save final model
     torch.save(model.state_dict(), 'jepa_final_model.pt')
     return model
+
 
 # Main training function
 def main():
@@ -197,13 +358,14 @@ def main():
     
     print("Model parameter count:", sum(p.numel() for p in model.parameters() if p.requires_grad))
     
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-5)
     
     print("Starting training...")
     trained_model = train_jepa(model, dataloader, optimizer, epochs)
     
     print("Training complete. Model saved as 'jepa_final_model.pt'")
     return trained_model
+
 
 if __name__ == "__main__":
     main()
