@@ -65,9 +65,13 @@ learning_rate = 0.001
 epochs = 100
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# Multi-step prediction horizons
+unroll_steps = [1, 3, 5]  # Apply loss at steps 1, 3, and 5
+horizon_weights = [0.5, 0.3, 0.2]  # Higher weight to shorter horizons
+
 # Load data
 def load_training_data(data_path="/scratch/DL25SP/train"):
-    states = np.load(f"{data_path}/states.npy",mmap_mode="r")
+    states = np.load(f"{data_path}/states.npy", mmap_mode="r")
     actions = np.load(f"{data_path}/actions.npy")
     
     print(f"Loaded states with shape {states.shape}")
@@ -125,34 +129,59 @@ def train_jepa(model, dataloader, optimizer, epochs):
                 current_repr = model.encoder(init_state)
                 
                 pred_reprs = [current_repr]
+                hidden = None  # Initialize hidden state
+                
                 for t in range(T-1):
                     current_action = actions[:, t]
-                    next_repr = model.predictor(current_repr, current_action)
+                    next_repr, hidden = model.predictor(current_repr, current_action, hidden)
                     pred_reprs.append(next_repr)
                     current_repr = next_repr  # For next step
                 
                 pred_reprs = torch.stack(pred_reprs, dim=1)  # [B, T, repr_dim]
                 
-                # Calculate loss for each timestep except the first (which is the same)
+                # Calculate losses for multiple time horizons
                 losses = []
                 loss_info = {'sim_loss': 0, 'var_loss': 0, 'cov_loss': 0, 'total_loss': 0}
                 
-                for t in range(1, T):
-                    loss, info = vicreg_loss(
-                        pred_reprs[:, t], 
-                        target_reprs[:, t]
-                    )
-                    losses.append(loss)
-                    for k, v in info.items():
-                        loss_info[k] += v
+                # Apply loss at specified unroll steps
+                for step_idx, step in enumerate(unroll_steps):
+                    if step < T:
+                        weight = horizon_weights[step_idx]
+                        
+                        # Apply VicReg loss at this horizon
+                        loss, info = vicreg_loss(
+                            pred_reprs[:, step], 
+                            target_reprs[:, step]
+                        )
+                        
+                        # Apply weight for this horizon
+                        weighted_loss = weight * loss
+                        losses.append(weighted_loss)
+                        
+                        # Track loss components
+                        for k, v in info.items():
+                            loss_info[k] += weight * v
                 
-                # Average the losses    
-                total_loss = sum(losses) / len(losses)
-                for k in loss_info:
-                    loss_info[k] /= len(losses)
+                # Calculate immediate-horizon losses (step=1) for all timesteps
+                for t in range(1, T):
+                    # Skip timesteps that were already included in unroll_steps
+                    if t not in unroll_steps:
+                        loss, info = vicreg_loss(
+                            pred_reprs[:, t], 
+                            target_reprs[:, t]
+                        )
+                        losses.append(loss * 0.1)  # Lower weight for regular steps
+                        
+                        for k, v in info.items():
+                            loss_info[k] += 0.1 * v
+                
+                # Sum all losses
+                total_loss = sum(losses)
                 
                 # Backpropagate and update
                 total_loss.backward()
+                # Add gradient clipping for stability
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
                 
                 # Log
@@ -168,6 +197,10 @@ def train_jepa(model, dataloader, optimizer, epochs):
                     'var': var_losses / (batch_idx + 1),
                     'cov': cov_losses / (batch_idx + 1)
                 })
+                
+                # Debug every 100 batches
+                if batch_idx % 100 == 0:
+                    print(f"Multi-step losses at horizons {unroll_steps}, weights {horizon_weights}")
         
         print(f"Epoch {epoch+1}/{epochs}, Loss: {epoch_loss / len(dataloader)}")
         
@@ -196,6 +229,7 @@ def main():
     model = JEPAModel(repr_dim=repr_dim, hidden_dim=hidden_dim).to(device)
     
     print("Model parameter count:", sum(p.numel() for p in model.parameters() if p.requires_grad))
+    print(f"Using multi-step prediction horizons: {unroll_steps} with weights {horizon_weights}")
     
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     
