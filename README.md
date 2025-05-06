@@ -17,11 +17,11 @@ Here we enhance our original architecture for multistep prediction, the previous
 The models maintains and passes the GRU’s hidden state between the steps and allows the network build a memory of the trajectory and loss is applied as weight average towards being correct in the future trying to make learning more error.
 Instead of comparing every prediction to its ground truth equally, we apply VICReg only at specific steps, with weights. At steps [1,3,5,] -> horizon weights [0.5,0.3,0.2]
 
-probe_normal val loss: 2.036336898803711
-probe_wall val loss: 5.650292873382568
-wall_other val loss: 6.919018745422363
-expert val loss: 7.305054187774658
-trainable parameters of your model 1,885,632
+\\probe_normal val loss: 2.036336898803711
+\\probe_wall val loss: 5.650292873382568
+\\wall_other val loss: 6.919018745422363
+\\expert val loss: 7.305054187774658
+\\trainable parameters of your model 1,885,632
 
 <img src="assets/JEPA-latent-predictions.png" alt="Alt Text" vh="500"/>
 
