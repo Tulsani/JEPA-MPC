@@ -2,7 +2,7 @@
 
 ## Overview
 
-In this project, you will train a JEPA world model on a set of pre-collected trajectories from a toy environment involving an agent in two rooms.
+In this project, we train a JEPA world model on a set of pre-collected trajectories from a toy environment involving an agent in two rooms.
 
 ### Our approach
 
