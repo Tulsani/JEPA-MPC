@@ -62,7 +62,7 @@ repr_dim = 256
 hidden_dim = 256
 batch_size = 64
 learning_rate = 0.001
-epochs = 100
+epochs = 40
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Load data

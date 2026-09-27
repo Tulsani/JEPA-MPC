@@ -1,7 +1,7 @@
 from dataset import create_wall_dataloader
 from evaluator import ProbingEvaluator
 import torch
-from models import MockModel
+#from models import MockModel
 import glob
 from models import JEPAModel
 
@@ -85,7 +85,7 @@ def load_model():
     """Load or initialize the model."""
     # Load our trained JEPA model
     model = JEPAModel(repr_dim=256, hidden_dim=256).to(get_device())
-    model.load_state_dict(torch.load('jepa_final_model.pt'))
+    model.load_state_dict(torch.load('model_weights.pt'))
     model.eval()
     return model
 
