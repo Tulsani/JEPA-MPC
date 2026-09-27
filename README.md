@@ -144,3 +144,35 @@ There will be a total of **four** evaluation settings for this project.
 
 
 
+---
+
+## Adaptive-horizon planning extension
+
+The `feature/pusht-test` work introduces an environment-independent package in
+`jepa_mpc/` while preserving the original wall experiment and evaluation code.
+The initial implementation includes:
+
+- a resolution-independent image encoder with optional proprioception;
+- action-conditioned recurrent latent dynamics with explicit hidden state;
+- an online JEPA encoder and frozen EMA target encoder;
+- multi-horizon latent prediction loss;
+- episode-safe sequence sampling;
+- a lazy Push-T Zarr dataset adapter; and
+- adaptive selection over every prefix of sampled action sequences.
+
+The planner deliberately separates candidate generation from prefix scoring.
+CEM or MPPI can generate candidate actions up to a maximum horizon, while
+`AdaptiveHorizonPlanner` jointly selects the candidate and effective horizon.
+
+### Development setup
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev,pusht]"
+pytest -q
+```
+
+The default Push-T experiment settings are in `configs/pusht.yaml`. The next
+implementation stage will connect the adaptive-horizon evaluator to CEM and to
+closed-loop Push-T environment rollouts.

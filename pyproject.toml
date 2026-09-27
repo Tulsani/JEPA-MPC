@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jepa-mpc"
+version = "0.1.0"
+description = "Adaptive-horizon planning with action-conditioned JEPA world models"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.23",
+    "torch>=2.1",
+]
+
+[project.optional-dependencies]
+pusht = ["zarr>=2.16,<3"]
+dev = ["pytest>=7.4"]
+
+[tool.setuptools.packages.find]
+include = ["jepa_mpc*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

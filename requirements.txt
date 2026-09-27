@@ -2,3 +2,8 @@ matplotlib==3.4.2
 numpy==1.23.5
 omegaconf==2.1.2
 tqdm==4.65.0
+torch>=2.1
+
+# Development and optional Push-T dataset support
+pytest>=7.4
+zarr>=2.16,<3

@@ -1,0 +1,39 @@
+experiment:
+  name: pusht_adaptive_horizon
+  seed: 0
+
+dataset:
+  format: zarr
+  path: data/pusht/pusht_cchi_v7_replay.zarr
+  image_key: img
+  state_key: state
+  action_key: action
+  sequence_horizon: 16
+  train_fraction: 0.9
+
+model:
+  image_channels: 3
+  proprio_dim: 2
+  action_dim: 2
+  repr_dim: 256
+  hidden_dim: 256
+  residual_dynamics: true
+  ema_decay: 0.996
+
+training:
+  batch_size: 64
+  learning_rate: 0.0003
+  weight_decay: 0.000001
+  epochs: 100
+  horizon_weighting: uniform
+
+planning:
+  planner: cem
+  max_horizon: 16
+  min_horizon: 1
+  candidates: 512
+  elites: 64
+  iterations: 5
+  execute_steps: 1
+  uncertainty_weight: 0.0
+  duration_weight: 0.0
