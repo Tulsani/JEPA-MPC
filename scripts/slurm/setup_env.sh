@@ -6,7 +6,10 @@ set -euo pipefail
 SCRATCH=${SCRATCH_ROOT:-/gpfs/scratch/${USER}/at6646}
 ENV_PATH=${ENV_PATH:-${SCRATCH}/conda_envs/jepa_mpc}
 
-source ~/.bashrc
+# System bashrc files and conda hooks reference unset variables; relax -u here.
+set +u
+source ~/.bashrc || true
+eval "$(conda shell.bash hook)"
 if [ ! -d "${ENV_PATH}" ]; then
     conda create -y -p "${ENV_PATH}" python=3.10
 fi
@@ -17,6 +20,7 @@ conda install -y -c conda-forge swig ffmpeg
 pip install --upgrade pip
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 pip install -e ".[cluster,dev]"
+set -u
 
 python -m pytest -q
 python -c "import stable_worldmodel as swm, h5py, hdf5plugin; print('stable-worldmodel', swm.__version__ if hasattr(swm, '__version__') else 'ok')"

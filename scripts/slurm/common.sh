@@ -18,8 +18,10 @@ export MUJOCO_GL=egl
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 mkdir -p "${TMPDIR}" "${DATA_ROOT}" "${RUNS_ROOT}" "${STABLEWM_HOME}"
 
-set +u  # conda activation scripts reference unset variables
-source ~/.bashrc
+# System bashrc files and conda hooks reference unset variables; relax -u here.
+set +u
+source ~/.bashrc || true
+eval "$(conda shell.bash hook)"
 conda activate "${ENV_PATH}"
 set -u
 
