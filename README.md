@@ -176,3 +176,32 @@ pytest -q
 The default Push-T experiment settings are in `configs/pusht.yaml`. The next
 implementation stage will connect the adaptive-horizon evaluator to CEM and to
 closed-loop Push-T environment rollouts.
+
+---
+
+## Two-clock hierarchical planning (CoRL 2026 workshop track)
+
+A recurrent world model that **learns when a subgoal is finished**, instead of
+using a fixed stride (FF-JEPA, Hi-LeWM) or random waypoints (HWM). A fast clock
+(GRU) steps every action block; a boundary gate on its hidden state ends
+segments; a slow clock jumps from segment start to segment end via a
+low-dimensional macro-action and predicts segment duration. At planning time
+the gate, evaluated on real observations, decides when the persistent subgoal
+is replaced. Design and claims are in `AGENTS.md`; related work is in
+`references.md`.
+
+Latents come from the frozen LeWM Push-T encoder (`quentinll/lewm-pusht`);
+closed-loop evaluation uses `stable-worldmodel==0.1.1`.
+
+### UltraViolet workflow
+
+```bash
+bash scripts/slurm/setup_env.sh                        # once, on a login node
+LIMIT_EPISODES=20 OUT_NAME=pusht_lewm_debug sbatch scripts/slurm/cache_latents.sh  # quick check
+bash scripts/slurm/submit_pipeline.sh                  # cache -> fast clock -> slow/gate sweep
+sbatch scripts/slurm/analyze.sh                        # C1/C2 offline analysis
+PLANNER=lewm D=25 sbatch scripts/slurm/eval_planning.sh  # reproduce flat LeWM
+LEARNED=... FIXED=... RANDOM=... bash scripts/slurm/submit_eval.sh  # C3/C4 matrix
+```
+
+Local tests: `python -m pytest -q`.

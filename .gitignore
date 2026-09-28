@@ -10,3 +10,5 @@ outputs/
 /CLAUDE.md
 /AGENTS.md
 .DS_Store
+logs/
+/OG-AGENTS.md

@@ -18,7 +18,8 @@ class ActionConditionedTransition(nn.Module):
     Passing hidden state explicitly makes the recurrence unambiguous and lets a
     planner carry separate recurrent state for every sampled action sequence.
     Set ``residual=True`` to predict a latent displacement instead of replacing
-    the previous latent directly.
+    the previous latent directly. Set ``output_norm=False`` when targets come
+    from a frozen encoder whose latents are not layer-normalized (e.g. LeWM).
     """
 
     def __init__(
@@ -28,6 +29,7 @@ class ActionConditionedTransition(nn.Module):
         hidden_dim: int = 256,
         action_embed_dim: int = 64,
         residual: bool = True,
+        output_norm: bool = True,
     ) -> None:
         super().__init__()
         self.repr_dim = repr_dim
@@ -46,7 +48,7 @@ class ActionConditionedTransition(nn.Module):
             nn.SiLU(),
             nn.Linear(hidden_dim, repr_dim),
         )
-        self.output_norm = nn.LayerNorm(repr_dim)
+        self.output_norm: nn.Module = nn.LayerNorm(repr_dim) if output_norm else nn.Identity()
 
     def initial_hidden(self, latent: torch.Tensor) -> torch.Tensor:
         return latent.new_zeros((*latent.shape[:-1], self.hidden_dim))

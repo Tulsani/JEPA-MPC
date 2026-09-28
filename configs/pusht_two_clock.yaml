@@ -1,0 +1,44 @@
+# Two-clock hierarchical JEPA on Push-T over frozen LeWM embeddings.
+# One model step = one action block of `frameskip` env steps (LeWM convention).
+
+experiment:
+  seed: 0
+
+data:
+  cache_dir: ${DATA_ROOT}/latents/pusht_lewm   # env vars are expanded
+  frameskip: 5
+  window: 16            # blocks per training window (80 env steps)
+  val_fraction: 0.1     # episode-level split
+  split_seed: 0
+  start_stride: 1
+  num_workers: 4
+
+model:
+  hidden_dim: 512
+  macro_dim: 8
+  max_segment: 10       # J_max blocks (50 env steps)
+  gate_width: 256
+  slow_width: 512
+  init_boundary_rate: 0.2
+
+fast:
+  epochs: 30
+  steps_per_epoch: 2000
+  batch_size: 256
+  lr: 0.0003
+  weight_decay: 0.0001
+  teacher_weight: 1.0
+  open_loop_weight: 1.0
+
+slow:
+  epochs: 30
+  steps_per_epoch: 2000
+  batch_size: 256
+  lr: 0.0003
+  weight_decay: 0.0001
+  segment_mode: learned  # learned | fixed | random
+  fixed_length: 5        # used by `fixed` (5 blocks = 25 env steps, FF-JEPA stride)
+  boundary_cost: 0.5     # beta for `learned`; sweep to match mean segment length
+  uniform_weight: 0.1
+  macro_kl_weight: 0.001
+  duration_weight: 0.1
