@@ -44,4 +44,8 @@ print(f'Python:  {sys.version.split()[0]}')
 print(f'PyTorch: {torch.__version__}  CUDA: {torch.cuda.is_available()}')
 if torch.cuda.is_available():
     print(f'GPU:     {torch.cuda.get_device_name(0)}')
-"
+    torch.zeros(1, device='cuda')  # fails fast on a busy/broken GPU
+" || {
+    echo "ERROR: GPU unusable on ${SLURMD_NODENAME:-this node}. Resubmit with --exclude=${SLURMD_NODENAME:-<node>}" >&2
+    exit 1
+}

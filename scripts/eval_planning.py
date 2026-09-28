@@ -221,9 +221,11 @@ def main() -> None:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     args.out.mkdir(parents=True, exist_ok=True)
-    dataset = swm.data.HDF5Dataset(
-        args.dataset_name, keys_to_cache=["action", "proprio", "state"], cache_dir=args.dataset_dir
-    )
+    # Pass the file path directly: with cache_dir, swm looks under <cache_dir>/datasets/.
+    dataset_path = args.dataset_dir / f"{args.dataset_name}.h5"
+    if not dataset_path.exists():
+        raise SystemExit(f"dataset not found: {dataset_path}")
+    dataset = swm.data.HDF5Dataset(keys_to_cache=["action", "proprio", "state"], path=dataset_path)
     world = swm.World(env_name=args.env_name, num_envs=args.num_eval, image_shape=(args.img_size, args.img_size),
                       max_episode_steps=2 * args.eval_budget)
 
