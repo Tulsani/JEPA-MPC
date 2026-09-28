@@ -7,3 +7,6 @@ __pycache__/
 /data/
 runs/
 outputs/
+/CLAUDE.md
+/AGENTS.md
+.DS_Store
