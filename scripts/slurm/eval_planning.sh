@@ -12,6 +12,8 @@
 #   PLANNER=lewm D=25 sbatch scripts/slurm/eval_planning.sh                 # reproduce flat LeWM
 #   CKPT=$RUNS_ROOT/pusht_slow_learned_b0.5_s0/best.pt MODE=learned D=75 sbatch scripts/slurm/eval_planning.sh
 #   CKPT=... MODE=flat D=75 sbatch scripts/slurm/eval_planning.sh           # our flat baseline
+#   CKPT=... MODE=fixed FIXED_LENGTH=1 D=75 sbatch scripts/slurm/eval_planning.sh  # timing ablation
+#   CKPT=... MODE=learned STD_MACROS=1 D=75 sbatch scripts/slurm/eval_planning.sh  # macro-prior ablation
 # BUDGET defaults to 2*D env steps.
 
 source "${SLURM_SUBMIT_DIR:-.}/scripts/slurm/common.sh"
@@ -29,6 +31,8 @@ if [ "${PLANNER}" = "two_clock" ]; then
     if [ -n "${COST_MODE:-}" ]; then EXTRA+=(--cost-mode "${COST_MODE}"); fi
     if [ -n "${VAL_ONLY:-}" ]; then EXTRA+=(--val-only); fi
     RUN_TAG=$(basename "$(dirname "${CKPT}")")_${MODE:-ckpt}
+    if [ -n "${FIXED_LENGTH:-}" ]; then EXTRA+=(--fixed-length "${FIXED_LENGTH}"); RUN_TAG=${RUN_TAG}${FIXED_LENGTH}; fi
+    if [ -n "${STD_MACROS:-}" ]; then EXTRA+=(--standard-normal-macros); RUN_TAG=${RUN_TAG}_stdmacro; fi
 else
     RUN_TAG=lewm_flat
 fi

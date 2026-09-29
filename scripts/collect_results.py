@@ -70,6 +70,33 @@ def analysis(root: Path) -> None:
                 print(f"      {label} | " + " | ".join(fmt(result.get(f"{horizon}/{k}"), 3) for k in keys))
 
 
+def wilson(successes: int, total: int, z: float = 1.96) -> tuple[float, float]:
+    if total == 0:
+        return float("nan"), float("nan")
+    p = successes / total
+    denominator = 1 + z * z / total
+    center = (p + z * z / (2 * total)) / denominator
+    half = z * (p * (1 - p) / total + z * z / (4 * total * total)) ** 0.5 / denominator
+    return 100 * (center - half), 100 * (center + half)
+
+
+def pooled_evaluations(root: Path) -> None:
+    """Pool evaluation seeds per method and offset; report Wilson 95% intervals."""
+    import re
+    from collections import defaultdict
+
+    groups: dict[str, list[int]] = defaultdict(list)
+    for path in sorted((root / "eval").glob("*/result.json")):
+        name = re.sub(r"_seed\d+$", "", path.parent.name)
+        groups[name].extend(json.loads(path.read_text())["episode_successes"])
+    if not groups:
+        return
+    print("\n## pooled over evaluation seeds (success %, 95% Wilson interval)")
+    for name, outcomes in sorted(groups.items()):
+        low, high = wilson(sum(outcomes), len(outcomes))
+        print(f"   {name}: {100 * sum(outcomes) / len(outcomes):.1f}% [{low:.1f}, {high:.1f}] (n={len(outcomes)})")
+
+
 def evaluations(root: Path) -> None:
     results = sorted((root / "eval").glob("*/result.json"))
     if not results:
@@ -95,6 +122,7 @@ def main() -> None:
     training_runs(args.runs_root)
     analysis(args.runs_root)
     evaluations(args.runs_root)
+    pooled_evaluations(args.runs_root)
 
 
 if __name__ == "__main__":
