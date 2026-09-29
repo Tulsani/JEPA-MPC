@@ -11,6 +11,7 @@
 # Offline C1/C2 analysis over every finished slow run for a seed.
 #   sbatch scripts/slurm/analyze.sh
 #   SEED=1 OUT_NAME=analysis_s1 sbatch scripts/slurm/analyze.sh
+#   MAX_EPISODES=500 sbatch scripts/slurm/analyze.sh       # faster, subset of val episodes
 
 source "${SLURM_SUBMIT_DIR:-.}/scripts/slurm/common.sh"
 
@@ -25,5 +26,8 @@ for run in "${RUNS_ROOT}"/pusht_slow_*_s${SEED}; do
 done
 if [ ${#ARGS[@]} -eq 0 ]; then echo "no finished slow runs for seed ${SEED}"; exit 1; fi
 
+if [ -n "${MAX_EPISODES:-}" ]; then ARGS+=(--max-episodes "${MAX_EPISODES}"); fi
+
 python scripts/analyze_offline.py ${ARGS[@]+"${ARGS[@]}"} --out "${RUNS_ROOT}/${OUT_NAME}"
+python scripts/collect_results.py --runs-root "${RUNS_ROOT}"
 echo "Done: $(date)"
