@@ -31,7 +31,9 @@ import torch  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from jepa_mpc.data.latent_cache import LatentCache  # noqa: E402
 from jepa_mpc.envs.lewm import encode_images, load_lewm  # noqa: E402
+from jepa_mpc.evaluation.boundaries import macro_statistics  # noqa: E402
 from jepa_mpc.planning.hierarchical import PLANNER_MODES, PlannerConfig, TwoClockPlanner  # noqa: E402
 from jepa_mpc.training.checkpoints import load_two_clock_checkpoint  # noqa: E402
 
@@ -63,6 +65,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--img-size", type=int, default=224)
     parser.add_argument("--out", type=Path, required=True, help="results directory")
     parser.add_argument("--video", action="store_true")
+    parser.add_argument("--standard-normal-macros", action="store_true",
+                        help="ablation: sample macros from N(0, I) instead of their empirical distribution")
     return parser.parse_args()
 
 
@@ -241,11 +245,21 @@ def main() -> None:
         slow = payload["config"]["slow"]
         mode = args.mode or CHECKPOINT_MODE[slow["segment_mode"]]
         fixed_length = args.fixed_length or slow["fixed_length"]
+        macro_mean = macro_std = None
+        if mode != "flat" and not args.standard_normal_macros:
+            cache = LatentCache.load(payload["config"]["data"]["cache_dir"])
+            mean, std = macro_statistics(
+                model.to(device), cache, np.asarray(payload["train_episodes"]),
+                payload["config"]["data"]["frameskip"], normalizer, device=device,
+            )
+            macro_mean, macro_std = mean.tolist(), std.tolist()
+            print(f"[macro] empirical mean |m|={np.abs(mean).mean():.3f}, std range "
+                  f"[{std.min():.3f}, {std.max():.3f}]", flush=True)
         planner_config = PlannerConfig(
             mode=mode, fixed_length=fixed_length, low_horizon=args.low_horizon, high_jumps=args.high_jumps,
             cost_mode=args.cost_mode, low_samples=args.samples, low_iterations=args.iterations,
             low_elites=args.elites, high_samples=args.samples, high_iterations=args.iterations,
-            high_elites=args.elites,
+            high_elites=args.elites, macro_mean=macro_mean, macro_std=macro_std,
         )
         encoder = load_lewm(args.encoder_repo, device)
         policy = TwoClockPolicy(planner_config, model.to(device), normalizer, encoder, args, device)

@@ -50,6 +50,11 @@ class PlannerConfig:
     gate_threshold: float = 0.5
     reach_fraction: float = 0.1  # subgoal reached when error < fraction of initial error
     jump_penalty: float = 0.0  # per extra high-level jump, in goal-cost units
+    # High-level CEM samples u ~ N(0, I) and uses m = macro_mean + macro_std * u,
+    # so candidates follow the empirical macro distribution of training segments
+    # (avoids out-of-distribution macro-actions; see Hi-LeWM).
+    macro_mean: list[float] | None = None
+    macro_std: list[float] | None = None
 
     def __post_init__(self) -> None:
         if self.mode not in PLANNER_MODES:
@@ -76,6 +81,17 @@ class TwoClockPlanner:
         self.device = torch.device(device)
         self.generator = torch.Generator(device=self.device).manual_seed(seed)
         self.num_envs = num_envs
+        dim = model.macro_dim
+        self.macro_mean = torch.as_tensor(
+            config.macro_mean if config.macro_mean is not None else [0.0] * dim,
+            dtype=torch.float32, device=self.device,
+        )
+        self.macro_std = torch.as_tensor(
+            config.macro_std if config.macro_std is not None else [1.0] * dim,
+            dtype=torch.float32, device=self.device,
+        )
+        if self.macro_mean.shape != (dim,) or self.macro_std.shape != (dim,):
+            raise ValueError(f"macro statistics must have shape ({dim},)")
         self.reset()
 
     # ------------------------------------------------------------ state
@@ -109,10 +125,13 @@ class TwoClockPlanner:
         config, model = self.config, self.model
         count = latent.shape[0]
 
-        def cost_fn(macros: torch.Tensor) -> torch.Tensor:
-            samples = macros.shape[1]
+        def to_macro(standardized: torch.Tensor) -> torch.Tensor:
+            return self.macro_mean + self.macro_std * standardized
+
+        def cost_fn(standardized: torch.Tensor) -> torch.Tensor:
+            samples = standardized.shape[1]
             start = latent[:, None].expand(count, samples, -1)
-            predicted, _ = model.slow_rollout(start, macros)  # [e, N, K, D]
+            predicted, _ = model.slow_rollout(start, to_macro(standardized))  # [e, N, K, D]
             costs = latent_cost(predicted, goal[:, None, None])
             costs = costs + config.jump_penalty * torch.arange(
                 config.high_jumps, device=costs.device, dtype=costs.dtype
@@ -125,7 +144,7 @@ class TwoClockPlanner:
             elites=config.high_elites, bound=config.macro_bound, device=self.device,
             generator=self.generator,
         )
-        subgoal, duration_logits = model.slow_jump(latent, result.best[:, 0])
+        subgoal, duration_logits = model.slow_jump(latent, to_macro(result.best[:, 0]))
         return subgoal, duration_logits.argmax(dim=-1) + 1
 
     @torch.no_grad()

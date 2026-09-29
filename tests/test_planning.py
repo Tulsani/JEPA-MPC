@@ -77,3 +77,28 @@ def test_partial_env_updates_and_reset():
     assert planner.elapsed[1] == 1 and planner.elapsed[0] == 0
     planner.reset([1])
     assert not planner.has_subgoal[1] and planner.has_subgoal[0]
+
+
+def test_macro_statistics_shift_high_level_samples():
+    import numpy as np
+
+    from jepa_mpc.data.latent_cache import ActionNormalizer, LatentCache
+    from jepa_mpc.evaluation.boundaries import macro_statistics
+
+    model = make_model()
+    rng = np.random.default_rng(0)
+    cache = LatentCache(
+        emb=rng.normal(size=(200, 6)).astype(np.float16),
+        action=rng.normal(size=(200, 2)).astype(np.float32),
+        ep_len=np.array([100, 100]), ep_offset=np.array([0, 100]),
+    )
+    normalizer = ActionNormalizer.fit(np.asarray(cache.action))
+    mean, std = macro_statistics(model, cache, np.array([0, 1]), 2, normalizer, num_segments=500)
+    assert mean.shape == (3,) and std.shape == (3,) and (std > 0).all()
+
+    config = small_config(mode="learned", macro_mean=mean.tolist(), macro_std=std.tolist())
+    planner = TwoClockPlanner(model, config, num_envs=2)
+    action, _ = planner.act(torch.randn(2, 6), torch.randn(2, 6))
+    assert action.shape == (2, 4)
+    with pytest.raises(ValueError):
+        TwoClockPlanner(model, small_config(macro_mean=[0.0]), num_envs=1)

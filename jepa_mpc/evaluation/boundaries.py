@@ -261,3 +261,40 @@ def block_pose_errors(predicted: np.ndarray, target: np.ndarray) -> tuple[np.nda
         wrap_angle(np.arctan2(predicted[:, 3], predicted[:, 2]) - np.arctan2(target[:, 3], target[:, 2]))
     )
     return position, angle
+
+
+@torch.no_grad()
+def macro_statistics(
+    model: TwoClockWorldModel,
+    cache: LatentCache,
+    episodes: np.ndarray,
+    frameskip: int,
+    normalizer: ActionNormalizer,
+    num_segments: int = 20_000,
+    seed: int = 0,
+    device: torch.device | str = "cpu",
+) -> tuple[np.ndarray, np.ndarray]:
+    """Mean/std of encoded macro-actions over random training segments.
+
+    Segment lengths are uniform on ``1..max_segment`` blocks. The planner
+    samples high-level candidates from this distribution instead of N(0, I).
+    """
+    rng = np.random.default_rng(seed)
+    max_segment = model.max_segment
+    span = max_segment * frameskip
+    eligible = np.asarray([e for e in episodes if cache.ep_len[e] > span])
+    if not len(eligible):
+        raise ValueError("no episode is long enough to sample macro segments")
+    chosen = rng.choice(eligible, num_segments)
+    starts = cache.ep_offset[chosen] + rng.integers(0, cache.ep_len[chosen] - span)
+    lengths = rng.integers(1, max_segment + 1, size=num_segments)
+    raw = np.stack([np.asarray(cache.action[s : s + span]) for s in starts])  # [n, span, a]
+    blocks = np.nan_to_num(normalizer.normalize(raw), nan=0.0).reshape(num_segments, max_segment, -1)
+    means = []
+    for begin in range(0, num_segments, 4096):
+        chunk = torch.from_numpy(blocks[begin : begin + 4096].astype(np.float32)).to(device)
+        prefix_means = model.encode_macro(chunk).mean  # [n, J, M]
+        index = torch.from_numpy(lengths[begin : begin + 4096] - 1).to(device)
+        means.append(prefix_means[torch.arange(len(index), device=device), index].cpu().numpy())
+    macros = np.concatenate(means)
+    return macros.mean(axis=0), np.maximum(macros.std(axis=0), 1e-3)
